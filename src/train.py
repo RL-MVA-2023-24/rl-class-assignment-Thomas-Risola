@@ -62,16 +62,20 @@ class ProjectAgent:
         return 
 
     ## MODEL ARCHITECTURE
-    # this work meh => 130 episode to see something good happening askip
-    
+    # this work meh => 100 episode to see something good happening askip
+    #train for 100 episode => start validation after 100 ep 
     def network(self, config, device):
 
         state_dim = env.observation_space.shape[0]
         n_action = env.action_space.n 
-        nb_neurons=24 #go try 200?
+        nb_neurons=256 #go try 200? idea stack one more layer for fun :) :)
 
         DQN = torch.nn.Sequential(nn.Linear(state_dim, nb_neurons),
                           nn.ReLU(),
+                          nn.Linear(nb_neurons, nb_neurons),
+                          nn.ReLU(), 
+                          nn.Linear(nb_neurons, nb_neurons),
+                          nn.ReLU(), 
                           nn.Linear(nb_neurons, nb_neurons),
                           nn.ReLU(), 
                           nn.Linear(nb_neurons, n_action)).to(device)
@@ -111,9 +115,9 @@ class ProjectAgent:
                 'epsilon_decay_period': 15000,
                 'epsilon_delay_decay': 500,
                 'batch_size': 100,
-                'gradient_steps': 1,
-                'update_target_strategy': 'ema', # or 'replace'
-                'update_target_freq': 50,
+                'gradient_steps': 2,
+                'update_target_strategy': 'replace', # or 'ema'
+                'update_target_freq': 400,
                 'update_target_tau': 0.005,
                 'criterion': torch.nn.SmoothL1Loss()}
 
@@ -151,7 +155,7 @@ class ProjectAgent:
 
         ## INITIATE NETWORK
 
-        max_episode = 300 #epoch
+        max_episode = 150 #epoch #maximum around 100 i guess
 
         episode_return = []
         episode = 0
@@ -197,13 +201,20 @@ class ProjectAgent:
                       ", epsilon ", '{:6.2f}'.format(epsilon), 
                       ", batch size ", '{:5d}'.format(len(self.memory)), 
                       ", episode return ", '{:4.1f}'.format(episode_cum_reward),
+                      ", or ", '{:.2e}'.format(episode_cum_reward),
                       sep='')
                 state, _ = env.reset()
+                # EARLY STOPPING
+                if episode > 1 and episode_cum_reward > np.max(episode_return):
+                    self.best_model = deepcopy(self.model).to(device)
                 episode_return.append(episode_cum_reward)
+                
                 episode_cum_reward = 0
             else:
                 state = next_state
 
+
+        self.model = deepcopy(self.best_model).to(device)
         path = os.getcwd()
         self.save(path)
         return episode_return
