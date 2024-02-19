@@ -1,5 +1,6 @@
 from gymnasium.wrappers import TimeLimit
 from env_hiv import HIVPatient
+from evaluate import evaluate_HIV, evaluate_HIV_population
 
 
 import random
@@ -40,7 +41,7 @@ class ProjectAgent:
     # act greedy
     def act(self, observation, use_random=False):
 
-        device = "cpu"
+        device = "cuda" if next(self.model.parameters()).is_cuda else "cpu"
         with torch.no_grad():
             Q = self.model(torch.Tensor(observation).unsqueeze(0).to(device))
             return torch.argmax(Q).item()
@@ -68,7 +69,7 @@ class ProjectAgent:
 
         state_dim = env.observation_space.shape[0]
         n_action = env.action_space.n 
-        nb_neurons=256 #go try 200? idea stack one more layer for fun :) :)
+        nb_neurons=256 #go try 256? 512? 1024 ? idea stack one more layer for fun :) :)
 
         DQN = torch.nn.Sequential(nn.Linear(state_dim, nb_neurons),
                           nn.ReLU(),
@@ -78,6 +79,8 @@ class ProjectAgent:
                           nn.ReLU(), 
                           nn.Linear(nb_neurons, nb_neurons),
                           nn.ReLU(), 
+                          # nn.Linear(nb_neurons, nb_neurons), # try this after ?
+                          # nn.ReLU(), 
                           nn.Linear(nb_neurons, n_action)).to(device)
 
         return DQN
@@ -90,7 +93,6 @@ class ProjectAgent:
             Q = network(torch.Tensor(state).unsqueeze(0).to(device))
             return torch.argmax(Q).item()
 
-
     def gradient_step(self):
         if len(self.memory) > self.batch_size:
             X, A, R, Y, D = self.memory.sample(self.batch_size)
@@ -101,6 +103,26 @@ class ProjectAgent:
             self.optimizer.zero_grad()
             loss.backward()
             self.optimizer.step() 
+
+    def gradient_step_v2(self):
+        if len(self.memory) > self.batch_size:
+            X, A, R, Y, D = self.memory.sample(self.batch_size)
+            Q_target_Ymax = self.target_model(Y).max(1)[0].detach()
+            Q_Ymax = self.model(Y).max(1)[0].detach()
+            next_Q = torch.min(Q_target_Ymax, Q_Ymax)
+            update = torch.addcmul(R, 1-D, next_Q, value=self.gamma)
+            Q_target_XA = self.target_model(X).gather(1, A.to(torch.long).unsqueeze(1))
+            Q_XA = self.model(X).gather(1, A.to(torch.long).unsqueeze(1))
+            
+            loss = self.criterion(Q_target_XA, update.unsqueeze(1))
+            self.optimizer.zero_grad()
+            loss.backward()
+            self.optimizer.step() 
+            
+            loss = self.criterion(Q_XA, update.unsqueeze(1))
+            self.optimizer2.zero_grad()
+            loss.backward()
+            self.optimizer2.step() 
     
     def train(self):
 
@@ -108,13 +130,13 @@ class ProjectAgent:
         # DQN config (change here for better results?)
         config = {'nb_actions': env.action_space.n,
                 'learning_rate': 0.001,
-                'gamma': 0.95,
-                'buffer_size': 1000000,
+                'gamma': 0.98,
+                'buffer_size': 100000,
                 'epsilon_min': 0.01,
                 'epsilon_max': 1.,
-                'epsilon_decay_period': 15000,
+                'epsilon_decay_period': 16000, # go plus haut? plus bas ?
                 'epsilon_delay_decay': 500,
-                'batch_size': 100,
+                'batch_size': 200,
                 'gradient_steps': 2,
                 'update_target_strategy': 'replace', # or 'ema'
                 'update_target_freq': 400,
@@ -145,7 +167,10 @@ class ProjectAgent:
         # learning parameters (loss, lr, optimizer, gradient step)
         self.criterion = config['criterion'] if 'criterion' in config.keys() else torch.nn.MSELoss()
         lr = config['learning_rate'] if 'learning_rate' in config.keys() else 0.001
+        
         self.optimizer = config['optimizer'] if 'optimizer' in config.keys() else torch.optim.Adam(self.model.parameters(), lr=lr)
+        self.optimizer2 = config['optimizer'] if 'optimizer' in config.keys() else torch.optim.Adam(self.model.parameters(), lr=lr)
+        
         nb_gradient_steps = config['gradient_steps'] if 'gradient_steps' in config.keys() else 1
 
         # target network
@@ -153,9 +178,11 @@ class ProjectAgent:
         update_target_freq = config['update_target_freq'] if 'update_target_freq' in config.keys() else 20
         update_target_tau = config['update_target_tau'] if 'update_target_tau' in config.keys() else 0.005
 
+
+        previous_val = 0
         ## INITIATE NETWORK
 
-        max_episode = 150 #epoch #maximum around 100 i guess
+        max_episode = 250 #epoch #maximum around 100 i guess
 
         episode_return = []
         episode = 0
@@ -197,16 +224,23 @@ class ProjectAgent:
             step += 1
             if done or trunc:
                 episode += 1
+                if episode > 0:
+                    validation_score = evaluate_HIV(agent=self, nb_episode=1)
+                else :
+                    validation_score = 0
                 print("Episode ", '{:3d}'.format(episode), 
                       ", epsilon ", '{:6.2f}'.format(epsilon), 
                       ", batch size ", '{:5d}'.format(len(self.memory)), 
-                      ", episode return ", '{:4.1f}'.format(episode_cum_reward),
-                      ", or ", '{:.2e}'.format(episode_cum_reward),
+                      ", episode return ", '{:.2e}'.format(episode_cum_reward),
+                      # evaluation score 
+                      ", validation score ", '{:.2e}'.format(validation_score),
                       sep='')
                 state, _ = env.reset()
-                # EARLY STOPPING
-                if episode > 1 and episode_cum_reward > np.max(episode_return):
-                    self.best_model = deepcopy(self.model).to(device)
+                # EARLY STOPPING => works really well
+                if validation_score >= previous_val:
+                   print("better model")
+                   previous_val = validation_score
+                   self.best_model = deepcopy(self.model).to(device)
                 episode_return.append(episode_cum_reward)
                 
                 episode_cum_reward = 0
@@ -214,7 +248,7 @@ class ProjectAgent:
                 state = next_state
 
 
-        self.model = deepcopy(self.best_model).to(device)
+        self.model.load_state_dict(self.best_model.state_dict())
         path = os.getcwd()
         self.save(path)
         return episode_return
