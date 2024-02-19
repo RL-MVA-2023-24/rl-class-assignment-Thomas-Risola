@@ -134,10 +134,10 @@ class ProjectAgent:
                 'buffer_size': 100000,
                 'epsilon_min': 0.01,
                 'epsilon_max': 1.,
-                'epsilon_decay_period': 16000, # go plus haut? plus bas ?
+                'epsilon_decay_period': 17000, # go plus haut? plus bas ?
                 'epsilon_delay_decay': 500,
-                'batch_size': 200,
-                'gradient_steps': 2,
+                'batch_size': 400,
+                'gradient_steps': 3,
                 'update_target_strategy': 'replace', # or 'ema'
                 'update_target_freq': 400,
                 'update_target_tau': 0.005,
@@ -182,7 +182,7 @@ class ProjectAgent:
         previous_val = 0
         ## INITIATE NETWORK
 
-        max_episode = 250 #epoch #maximum around 100 i guess
+        max_episode = 220 #epoch #maximum around 100 i guess
 
         episode_return = []
         episode = 0
