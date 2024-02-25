@@ -29,7 +29,7 @@ class ReplayBuffer:
 
 
 env = TimeLimit(
-    env=HIVPatient(domain_randomization=False), max_episode_steps=200
+    env=HIVPatient(domain_randomization=True), max_episode_steps=200
 )  # The time wrapper limits the number of steps in an episode at 200.
 # Now is the floor is yours to implement the agent and train it.
 
@@ -79,8 +79,8 @@ class ProjectAgent:
                           nn.ReLU(), 
                           nn.Linear(nb_neurons, nb_neurons),
                           nn.ReLU(), 
-                          # nn.Linear(nb_neurons, nb_neurons), # try this after ?
-                          # nn.ReLU(), 
+                          nn.Linear(nb_neurons, nb_neurons), # try this after ?
+                          nn.ReLU(),
                           nn.Linear(nb_neurons, n_action)).to(device)
 
         return DQN
@@ -132,11 +132,11 @@ class ProjectAgent:
                 'learning_rate': 0.001,
                 'gamma': 0.98,
                 'buffer_size': 100000,
-                'epsilon_min': 0.01,
+                'epsilon_min': 0.02,
                 'epsilon_max': 1.,
-                'epsilon_decay_period': 17000, # go plus haut? plus bas ?
-                'epsilon_delay_decay': 500,
-                'batch_size': 400,
+                'epsilon_decay_period': 20000, # go plus haut? plus bas ?
+                'epsilon_delay_decay': 100,
+                'batch_size': 800,
                 'gradient_steps': 3,
                 'update_target_strategy': 'replace', # or 'ema'
                 'update_target_freq': 400,
@@ -170,7 +170,8 @@ class ProjectAgent:
         
         self.optimizer = config['optimizer'] if 'optimizer' in config.keys() else torch.optim.Adam(self.model.parameters(), lr=lr)
         self.optimizer2 = config['optimizer'] if 'optimizer' in config.keys() else torch.optim.Adam(self.model.parameters(), lr=lr)
-        
+        #self.scheduler = torch.optim.lr_scheduler.StepLR(self.optimizer, step_size=88, gamma=0.1)
+
         nb_gradient_steps = config['gradient_steps'] if 'gradient_steps' in config.keys() else 1
 
         # target network
@@ -182,7 +183,7 @@ class ProjectAgent:
         previous_val = 0
         ## INITIATE NETWORK
 
-        max_episode = 220 #epoch #maximum around 100 i guess
+        max_episode = 240 #300 #epoch #maximum around 100 i guess
 
         episode_return = []
         episode = 0
@@ -209,6 +210,8 @@ class ProjectAgent:
             # train
             for _ in range(nb_gradient_steps): 
                 self.gradient_step()
+            #if episode > 5:
+            #   self.scheduler.step()
             # update target network if needed
             if update_target_strategy == 'replace':
                 if step % update_target_freq == 0: 
@@ -224,7 +227,7 @@ class ProjectAgent:
             step += 1
             if done or trunc:
                 episode += 1
-                if episode > 0:
+                if episode > 75:
                     validation_score = evaluate_HIV(agent=self, nb_episode=1)
                 else :
                     validation_score = 0
@@ -237,10 +240,12 @@ class ProjectAgent:
                       sep='')
                 state, _ = env.reset()
                 # EARLY STOPPING => works really well
-                if validation_score >= previous_val:
-                   print("better model")
-                   previous_val = validation_score
-                   self.best_model = deepcopy(self.model).to(device)
+                if validation_score > previous_val:
+                    print("better model")
+                    previous_val = validation_score
+                    self.best_model = deepcopy(self.model).to(device)
+                    path = os.getcwd()
+                    self.save(path)
                 episode_return.append(episode_cum_reward)
                 
                 episode_cum_reward = 0
